@@ -33,17 +33,23 @@ const ICON_RULES = [
   [/frances|copa|tras nuca|overhead (tricep|extension)|skull/, 'overhead'],
   [/tricep|fondos|dips|patada|pushdown|soga|cuerda/, 'triceps'],
   [/curl|bicep|martillo|hammer|predicador/, 'curl'],
-  [/abdom|crunch|plancha|plank|core|oblicu|rueda|elevacion de piernas|russian|bicho muerto|dead bug/, 'abs'],
+  [/hiperexten|lumbar|extension de espalda/, 'rdl'],
+  [/abdom|tronco|crunch|plancha|plank|core|oblicu|rueda|elevacion de piernas|russian|bicho muerto|dead bug/, 'abs'],
 ];
 const guessIcon = name => { const n = norm(name); for (const [re, k] of ICON_RULES) if (re.test(n)) return k; return 'generic'; };
 
 const MUSCLE_WORDS = /^(piernas?|gluteos?( y piernas?)?|cuadriceps|isquios?|espalda|pecho|hombros?|brazos?|torso|tren (superior|inferior)|full ?body|cuerpo completo|upper|lower|push|pull|legs|empuje|tiron|core|abdomen|abdominales|biceps|triceps|cardio|espalda y biceps|pecho y triceps|pecho y hombros)( [a-e1-9])?$/;
 const SKIP_WORDS = /^(calentamiento|calentar|entrada en calor|estirar|estiramiento|elongar|elongacion|movilidad|vuelta a la calma|cardio|caminar|cinta|bici|bicicleta|eliptico|correr|trotar)/;
 const REST_WORDS = /^(descanso|off|libre|recuperacion|rest)\b/;
+const STARTS_DAY = /^(lunes|martes|miercoles|jueves|viernes|sabado|domingo|monday|tuesday|wednesday|thursday|friday|saturday|sunday|(dia|day)\s*\d{1,2})\b/;
 
 /* Series y repeticiones */
 function findSets(lower) {
   let m;
+  // Series: 3 - Reps: 12 / 3 series - 12 reps
+  if ((m = lower.match(/series?\s*:?\s*(\d{1,2})\s*[-–,;|\/]?\s*(?:reps?|repeticiones)\s*:?\s*(\d{1,3})(?:\s*(?:-|–|a)\s*(\d{1,3}))?/))) {
+    return { at: m.index, len: m[0].length, sets: +m[1], rmin: +m[2], rmax: m[3] ? +m[3] : +m[2] };
+  }
   // 4x12-10-8 (pirámide)
   if ((m = lower.match(/(\d{1,2})\s*(?:x|×|\*)\s*(\d{1,3}(?:\s*[-–,\/]\s*\d{1,3}){2,})/))) {
     const nums = m[2].split(/[-–,\/]/).map(n => parseInt(n, 10));
@@ -142,7 +148,7 @@ function weekdayIn(n) {
 function isHeader(line, n, hasSets) {
   if (/^#{1,6}\s*/.test(line)) return true;
   if (hasSets) return false;
-  if (weekdayIn(n) !== null && n.length < 70) return true;
+  if (weekdayIn(n) !== null && (n.length < 90 || STARTS_DAY.test(n))) return true;
   if (/^(dia|day|rutina|entrenamiento|entreno|sesion|semana|bloque|workout)\s*(\d+|[a-e]|uno|dos|tres|cuatro|cinco)\b/.test(n)) return true;
   if (/^(rutina|entrenamiento|entreno|sesion|workout)\s+[a-z]/.test(n) && n.length < 40) return true;
   if (/:$/.test(line.trim()) && n.length < 50) return true;
@@ -186,37 +192,69 @@ function parseHeader(line) {
   return block;
 }
 
+function preclean(raw) {
+  return raw.replace(/\t/g, ' ').replace(/ /g, ' ').replace(/\*\*|__/g, '')
+    .replace(/(^|\s)\*(\S(?:[^*]*\S)?)\*(?=\s|$|[.,:;])/g, '$1$2').replace(/`/g, '').trim();
+}
+/* Filas de tabla markdown: | Ejercicio | Series | Reps | Descanso | */
+function tableRow(line) {
+  if (!/^\|.*\|$/.test(line)) return null;
+  const cells = line.slice(1, -1).split('|').map(c => c.trim());
+  if (cells.every(c => !c || /^:?-{2,}:?$/.test(c))) return '';
+  if (/^(ejercicio|ejercicios|exercise|nombre|movimiento|dia)$/.test(norm(cells[0]))) return '';
+  if (cells.length >= 3 && /^\d{1,2}$/.test(cells[1]) && /\d/.test(cells[2])) {
+    let out = `${cells[0]} ${cells[1]}x${cells[2].replace(/\s*(reps?|repeticiones)\s*/i, '')}`;
+    cells.slice(3).forEach(c => {
+      if (!c || c === '-') return;
+      if (/^\d/.test(c) && /(seg|s\b|min|'|")/i.test(c)) out += ` | desc ${c}`; else out += ` | ${c}`;
+    });
+    return out;
+  }
+  return cells.filter(Boolean).join(' | ');
+}
+
 function parse(text) {
   const warnings = [];
   const lines = String(text || '').replace(/\r/g, '').split('\n');
   const blocks = [];
   let cur = null;
-  for (let rawLine of lines) {
-    let line = rawLine.replace(/\t/g, ' ').replace(/\*\*/g, '').trim();
+  for (const rawLine of lines) {
+    let line = preclean(rawLine);
     if (!line || /^```/.test(line) || /^[-=_*~]{3,}$/.test(line)) continue;
-    const bullet = /^\s*(?:[-*•·▪►>✅✔☑️🔹🔸]+|\d{1,2}[.)]\s|[a-h][.)]\s)/.test(line);
+    const hash = /^#{1,6}/.test(line);
+    const tr = tableRow(line);
+    if (tr === '') continue;
+    if (tr) line = tr;
+    const bullet = /^\s*(?:[-*•·▪►>✅✔☑️🔹🔸]+|\d{1,2}[.)]\s|[a-h][.)]\s)/u.test(line);
     line = line.replace(/^\s*(?:[-*•·▪►>✅✔☑️🔹🔸]+|\d{1,2}[.)](?=\s)|[a-h][.)](?=\s))\s*/u, '').trim();
     if (!line) continue;
     const n = norm(line);
     const hasSets = !!findSets(line.toLowerCase());
-    if (!bullet && isHeader(rawLine.trim(), n, hasSets) || (/^#/.test(rawLine.trim()))) {
-      const b = parseHeader(rawLine.trim());
-      if (/^rutina$|^mi rutina$|^routine$/.test(norm(b.title)) && b.weekday === null && !b.label) { continue; }
+    const startsDay = STARTS_DAY.test(n.replace(/^#+\s*/, ''));
+    if (hash || (startsDay && !hasSets) || (!bullet && isHeader(line, n, hasSets))) {
+      const b = parseHeader(line);
+      if (/^rutina$|^mi rutina$|^routine$/.test(norm(b.title)) && b.weekday === null && !b.label) continue;
       cur = b; blocks.push(cur); continue;
     }
-    if (/^desc(anso|\.)?\b/.test(n) && cur && !/[a-z]{3,}.*\d+\s*x/.test(n)) {
-      const r = parseExercise(line).rest; if (r) { cur.rest = r; cur.exercises.forEach(e => { if (!e.rest) e.rest = r; }); } continue;
+    // "Descanso 1 min entre series" fija el descanso; "Descanso | 0x0" o "Descanso" marcan día libre
+    if (/^desc(anso|\.)?\b/.test(n)) {
+      const tm = n.replace(/\b0\s*[x×]\s*0\b/, '').match(/(\d+\s*(?:'|’)?\s*\d*\s*(?:-|–|a)?\s*\d*\s*(?:min(?:utos)?|m\b|seg(?:undos)?|s\b|"|''))/);
+      if (tm && cur) {
+        const r = tm[1].replace(/\s+/g, ' ').replace(/segundos|seg/, 's').replace(/minutos/, 'min').replace(/(\d)\s*m$/, '$1 min').trim();
+        cur.rest = r; cur.exercises.forEach(e => { if (!e.rest) e.rest = r; });
+      } else if (cur && !cur.exercises.length) cur.type = 'rest';
+      continue;
     }
+    if (/^(off|libre|recuperacion|rest|ninguno|nada|-+)$/.test(clean(n.split('|')[0])) || /^\s*0\s*[x×]\s*0\b/.test(n) || /\|\s*0\s*[x×]\s*0\b/.test(n)) continue;
     if (SKIP_WORDS.test(n) && !hasSets) { warnings.push(line); continue; }
     if (!hasSets && (line.length > 70 || /[.!?]$/.test(line) && line.split(' ').length > 6)) { warnings.push(line); continue; }
     if (!/[a-zA-Záéíóúñ]{3,}/.test(line)) { warnings.push(line); continue; }
     if (!cur) { cur = { weekday: null, title: '', sub: '', type: 'train', exercises: [], rest: '' }; blocks.push(cur); }
     const ex = parseExercise(line, cur.rest);
     if (!ex.name || ex.name.length < 3) { warnings.push(line); continue; }
-    if (cur.type === 'rest') cur.type = 'train';
+    if (cur.type === 'rest') { cur.type = 'train'; if (/^descanso$/i.test(cur.title)) cur.title = ''; }
     cur.exercises.push(ex);
   }
-  // descartar bloques vacíos sin día
   const useful = blocks.filter(b => b.exercises.length || (b.weekday !== null && b.type === 'rest'));
   return { blocks: useful, warnings };
 }

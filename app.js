@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-const VERSION = '2.0.0';
+const VERSION = '2.0.1';
 const KEY = 'rutina.v1';
 const { uid, PICS, ICONS, TEMPLATES, THEMES, AI_PROMPT } = window.RA;
 const RP = window.RutinaParser;

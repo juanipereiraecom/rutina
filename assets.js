@@ -153,7 +153,7 @@ const THEMES = [
   { id: 'grafito', name: 'Grafito', a: '#1C1C1C', ad: '#ECECE8', l: '#F2F2EF', d: '#0C0C0B' },
 ];
 
-const AI_PROMPT = `Convertí la rutina de gimnasio que te paso al final al formato exacto de abajo. Respondé SOLO con la rutina en ese formato, sin explicaciones ni texto extra.
+const AI_PROMPT = `Convertí la rutina de gimnasio que te paso al final al formato exacto de abajo. Respondé SOLO con la rutina dentro de un bloque de código (\`\`\`), sin explicaciones ni texto extra.
 
 FORMATO:
 ## Día de la semana | Nombre del día | Descripción corta
@@ -165,7 +165,7 @@ REGLAS:
 - Si un ejercicio es por pierna o por lado, agregá "| por pierna".
 - Si hay descanso entre series, agregá "| desc 90 s".
 - Aclaraciones o técnica: "| nota: texto" (siempre al final).
-- Un ejercicio por línea. Días de descanso: "## Domingo | Descanso".
+- Un ejercicio por línea. Días de descanso: solo "## Domingo | Descanso", sin ejercicios debajo.
 - Si un día es opcional, agregá "| opcional" en el encabezado.
 
 EJEMPLO:
