@@ -1,7 +1,7 @@
 // Guarda la app en el iPhone para que funcione sin internet.
-const CACHE = 'rutina-v1.1.0';
+const CACHE = 'rutina-v2.0.0';
 const FILES = [
-  './', './index.html', './styles.css', './app.js', './manifest.webmanifest',
+  './', './index.html', './styles.css', './app.js', './parser.js', './assets.js', './manifest.webmanifest',
   './fonts/archivo.woff2', './fonts/plexmono-500.woff2', './fonts/plexmono-600.woff2',
   './icons/apple-touch-icon.png', './icons/icon-192.png', './icons/icon-512.png',
 ];
