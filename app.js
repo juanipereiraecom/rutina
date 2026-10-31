@@ -1,6 +1,6 @@
 'use strict';
 (() => {
-const VERSION = '2.0.1';
+const VERSION = '2.1.0';
 const KEY = 'rutina.v1';
 const { uid, PICS, ICONS, TEMPLATES, THEMES, AI_PROMPT } = window.RA;
 const RP = window.RutinaParser;
@@ -200,6 +200,32 @@ const sessionsOn = k => S.sessions.filter(s => s.date === k);
 const weeksSinceStart = () => Math.floor(daysBetween(weekStart(S.created), weekStart(todayKey())) / 7) + 1;
 const sideTag = side => S.settings.side === side ? '<span class="tag">LESIÓN</span>' : '';
 const anyDone = s => Object.values(s.entries).some(e => e.done || e.skip);
+const isDraft = s => !s.finishedAt && (anyDone(s) || (s.free && s.items.length > 0));
+/* Rutinas del plan: cuáles ya se hicieron esta semana */
+function weekRoutines() {
+  const ws = weekStart(todayKey()), we = addDays(ws, 6);
+  const doneIdx = new Set(finished().filter(s => s.date >= ws && s.date <= we && s.dayIdx >= 0).map(s => s.dayIdx));
+  return S.plan.map((d, i) => ({ d, i, done: doneIdx.has(i) })).filter(x => x.d.type !== 'rest' && x.d.exercises.length);
+}
+/* Catálogo de ejercicios conocidos (rutina + entrenos anteriores), para mantener el historial */
+function catalog() {
+  const map = new Map();
+  S.plan.forEach((d, i) => d.exercises.forEach(e => { if (!map.has(e.id)) map.set(e.id, { ex: e, from: d.title }); }));
+  sortedSessions().reverse().forEach(s => (s.items || []).forEach(it => { if (!map.has(it.id)) map.set(it.id, { ex: it, from: s.free ? s.title : (s.title || 'Entreno anterior') }); }));
+  return [...map.values()];
+}
+function findByName(name) {
+  const n = RP.norm(name).trim();
+  const hit = catalog().find(c => RP.norm(c.ex.name).trim() === n);
+  return hit ? hit.ex : null;
+}
+const snapOf = e => ({ id: e.id, name: e.name, sets: e.sets, rmin: e.rmin, rmax: e.rmax, unit: e.unit || 'reps', icon: e.icon || 'generic', note: e.note || '', rest: e.rest || '', uni: !!e.uni, photo: e.photo || null });
+function exFromText(text) {
+  const p = RP.parseExercise(text);
+  const known = findByName(p.name);
+  if (known) { const sn = snapOf(known); if (!p.flags.includes('series')) { sn.sets = p.sets; sn.rmin = p.rmin; sn.rmax = p.rmax; sn.unit = p.unit === 's' ? 's' : 'reps'; } return sn; }
+  return { id: uid(), name: p.name, sets: p.sets, rmin: p.rmin, rmax: p.rmax, unit: p.unit === 's' ? 's' : 'reps', icon: p.icon, note: p.note || '', rest: p.rest || '', uni: !!p.uni, photo: null };
+}
 
 function tidySessions() {
   const t = todayKey(); let changed = false;
@@ -225,7 +251,7 @@ function back() {
 }
 function dropIfEmpty(sid) {
   const s = S.sessions.find(x => x.id === sid);
-  if (s && !s.finishedAt && !anyDone(s)) { S.sessions = S.sessions.filter(x => x !== s); save(); }
+  if (s && !s.finishedAt && !isDraft(s)) { S.sessions = S.sessions.filter(x => x !== s); save(); }
 }
 function setTab(t) { UI.tab = t; UI.stack = []; UI.nav = true; UI.countUp = t === 'progreso'; render(); }
 
@@ -435,7 +461,7 @@ function screenPreview(sc) {
 function tabHoy() {
   const t = todayKey(), di = dayIdx(t), day = S.plan[di], g = goal();
   const today = sessionsOn(t), fin = today.filter(s => s.finishedAt);
-  const draft = today.find(s => !s.finishedAt && anyDone(s));
+  const draft = today.find(isDraft);
   let card;
   if (draft) {
     const items = itemsOf(draft), d = items.filter(i => draft.entries[i.id] && (draft.entries[i.id].done || draft.entries[i.id].skip)).length;
@@ -452,12 +478,14 @@ function tabHoy() {
       <button class="btn btn-soft btn-block" data-a="pickRoutine">Entrenar igual</button></div>`;
   } else if (!day.exercises.length) {
     card = `<div class="today calm"><div><div class="label">HOY · ${DAYS[di].toUpperCase()}</div><div class="t">${esc(day.title)}</div><div class="s">Todavía no cargaste ejercicios para este día.</div></div>
-      <button class="btn btn-main btn-lg btn-block" data-a="editToday">${ic('plus', 'sm')} Cargar ejercicios</button></div>`;
+      <button class="btn btn-main btn-lg btn-block" data-a="editToday">${ic('plus', 'sm')} Cargar ejercicios</button>
+      <button class="textlink" style="color:inherit;margin:-8px 0 -10px" data-a="pickRoutine">Elegir otra rutina o entreno libre</button></div>`;
   } else {
     const n = day.exercises.length;
     card = `<div class="today ${day.type === 'optional' ? 'optional' : ''}"><div><div class="label">HOY · ${DAYS[di].toUpperCase()}${day.type === 'optional' ? ' · OPCIONAL' : ''}</div>
       <div class="t">${esc(day.title)}</div>${day.sub ? `<div class="s">${esc(day.sub)}</div>` : ''}<div class="m">${plural(n, 'ejercicio', 'ejercicios')}</div></div>
-      <button class="btn btn-main btn-lg btn-block" data-a="start" data-d="${di}">Empezar</button></div>`;
+      <button class="btn btn-main btn-lg btn-block" data-a="start" data-d="${di}">Empezar</button>
+      <button class="textlink" style="color:inherit;opacity:.85;margin:-8px 0 -10px" data-a="pickRoutine">Elegir otra rutina o entreno libre</button></div>`;
   }
 
   const ws = weekStart(t), count = weekCount(ws), st = streakInfo();
@@ -469,7 +497,7 @@ function tabHoy() {
   const rows = S.plan.map((d, i) => {
     const k = addDays(ws, i), isT = k === t, past = k < t;
     const sess = sessionsOn(k), fs = sess.filter(s => s.finishedAt).pop();
-    const prog = isT && sess.find(s => !s.finishedAt && anyDone(s));
+    const prog = isT && sess.find(isDraft);
     let cls = 'day', status = '';
     if (dd.has(k)) { cls += ' is-done'; status = `<span class="chk on">${ic('check', 'sm')}</span>`; }
     else if (prog) status = '<span class="status prog">En curso</span>';
@@ -497,7 +525,8 @@ function tabHoy() {
   <div class="head"><h1>${DAYS[di]} ${d0.getDate()}</h1><p class="sub">${cap(MONTHS[d0.getMonth()])} ${d0.getFullYear()}</p></div>
   ${card}${installTip}${backupTip}
   <div class="section"><div class="section-h"><h2>Esta semana</h2><span class="mono" style="font-size:14px;font-weight:600">${count} / ${g}</span></div>
-  <div class="segs">${segs}</div><div class="streak">${ic('flame', 'sm')}<span>${streakTxt}</span></div></div>
+  <div class="segs">${segs}</div><div class="streak">${ic('flame', 'sm')}<span>${streakTxt}</span></div>
+  ${(() => { const pend = weekRoutines().filter(x => !x.done && x.d.type === 'train'); return pend.length && count < g ? `<button class="streak" style="width:100%;text-align:left" data-a="pickRoutine">${ic('list', 'sm')}<span>Te falta: <b>${pend.map(x => esc(x.d.title)).join(' · ')}</b></span></button>` : ''; })()}</div>
   <div class="section stack stagger">${rows}</div>`;
 }
 
@@ -564,6 +593,7 @@ function screenWorkout(sc) {
   const items = itemsOf(s), t = todayKey();
   const handled = items.filter(i => s.entries[i.id] && (s.entries[i.id].done || s.entries[i.id].skip)).length;
   let openId = UI.expanded;
+  const own = s.free;
   if (openId === null && !s.finishedAt) { const nx = items.find(i => !(s.entries[i.id] && (s.entries[i.id].done || s.entries[i.id].skip))); openId = nx ? nx.id : null; }
 
   const cards = items.map(it => {
@@ -594,17 +624,34 @@ function screenWorkout(sc) {
       <div class="ex-actions">
         ${e.done || e.skip ? `<button class="btn btn-soft" data-a="undo" data-id="${it.id}">Desmarcar</button><button class="btn btn-ink" data-a="done" data-id="${it.id}">Guardar</button>`
           : `<button class="btn btn-soft" data-a="skip" data-id="${it.id}">Saltear</button><button class="btn btn-ink" data-a="done" data-id="${it.id}">${ic('check')} Hecho</button>`}
-      </div></div>`;
+      </div>
+      ${e.done ? '' : `<div class="row" style="gap:4px;justify-content:center;margin:-6px 0 -8px"><button class="textlink" style="font-size:13px;padding:0 10px" data-a="replaceEx" data-id="${it.id}">Reemplazar por otro hoy</button>${own || it.added ? `<button class="textlink" style="font-size:13px;padding:0 10px" data-a="removeEx" data-id="${it.id}">Quitar</button>` : ''}</div>`}
+      </div>`;
   }).join('');
 
   const mins = s.finishedAt && s.startedAt && !s.backfill ? Math.max(1, Math.round((s.finishedAt - s.startedAt) / 60000)) : null;
   const when = s.date === t ? `Hoy · ${fmtLong(t)}` : fmtLong(s.date);
   return `<div class="top">${backBtn()}<span class="row" style="gap:6px"><span class="mono" style="font-size:14px;font-weight:600;padding:0 6px">${handled} / ${items.length}</span><button class="icon-btn" data-a="sessionMenu" aria-label="Opciones del entrenamiento">${ic('dots')}</button></span></div>
-  <div class="head" style="margin-bottom:12px"><div class="eyebrow">${when}</div><h1 class="md">${esc(s.title)}</h1>${s.sub ? `<p class="sub">${esc(s.sub)}</p>` : ''}
+  <div class="head" style="margin-bottom:12px"><div class="eyebrow">${when}${own ? ' · entreno libre' : ''}</div>${own ? `<label><span class="sr">Nombre del entrenamiento</span><input class="titleinp" style="font-size:30px" value="${esc(s.title)}" data-in="sessTitle" maxlength="40"></label>` : `<h1 class="md">${esc(s.title)}</h1>`}${s.sub ? `<p class="sub">${esc(s.sub)}</p>` : ''}
   <div class="progress"><div style="width:${items.length ? handled / items.length * 100 : 0}%"></div></div></div>
   ${s.finishedAt ? `<div class="banner"><span class="chk on">${ic('check', 'sm')}</span><span>Completado${mins ? ` en ${mins} min` : ''}${s.backfill ? ' · registrado después' : ` · ${fmtTime(s.finishedAt)}`}. Tocá un ejercicio para corregir pesos.</span></div>` : ''}
   ${s.backfill && !s.finishedAt ? `<div class="banner">${ic('clock', 'sm')}<span>Estás registrando el <b>${fmtDayShort(s.date)}</b>. Va a contar para ese día.</span></div>` : ''}
-  <div class="stack ${UI.nav ? 'stagger' : ''}">${cards}</div>`;
+  ${own && !items.length ? `<div class="card empty" style="margin-bottom:8px">Agregá los ejercicios que vas a hacer: buscalos entre los tuyos, escribilos o pegá la rutina de otra persona.</div>` : ''}
+  <div class="stack ${UI.nav ? 'stagger' : ''}">${cards}<button class="addbtn" data-a="addExSheet">${ic('plus')} ${own ? 'Agregar ejercicio' : 'Agregar ejercicio solo por hoy'}</button></div>`;
+}
+function addToSession(list) {
+  const s = S.sessions.find(x => x.id === (UI.sheet && UI.sheet.sid)); if (!s) return;
+  const have = new Set(s.items.map(i => i.id));
+  const add = list.filter(i => !have.has(i.id)).map(i => Object.assign(i, { added: !s.free }));
+  if (!add.length) return toast('Ya está en este entrenamiento');
+  if (UI.sheet.mode === 'replace') {
+    const idx = s.items.findIndex(i => i.id === UI.sheet.rid);
+    if (idx >= 0) { delete s.entries[s.items[idx].id]; s.items.splice(idx, 1, add[0]); }
+    toast(`Hoy hacés ${add[0].name}`);
+  } else { s.items.push(...add); toast(add.length === 1 ? `${add[0].name} agregado` : `${add.length} ejercicios agregados`); }
+  s.updatedAt = Date.now(); invalidate(); save();
+  closeSheet(); UI.expanded = add[0].id; UI.fresh = add[0].id; render();
+  setTimeout(() => { const el = document.querySelector(`[data-exid="${add[0].id}"]`); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 80);
 }
 function curSession() { const t = top(); return t && t.type === 'workout' ? S.sessions.find(x => x.id === t.sid) : null; }
 const itemIn = (s, id) => itemsOf(s).find(i => i.id === id);
@@ -620,7 +667,7 @@ function buildSummary(s) {
     if (it.uni) ['wL', 'wR'].forEach(k => { const pm = Math.max(...prev.map(p => p[k] != null ? p[k] : -Infinity)); if (e[k] != null && pm > -Infinity && e[k] > pm) prs.push(`${it.name} (${k === 'wL' ? 'izq.' : 'der.'}): ${fk(e[k])} kg`); });
     else { const pm = Math.max(...prev.map(metric)); if (e.w != null && e.w > pm) prs.push(`${it.name}: ${fk(e.w)} kg`); }
   });
-  return { title: s.title, done: doneItems.length, total: items.length,
+  return { sid: s.id, free: !!s.free, title: s.title, done: doneItems.length, total: items.length,
     mins: s.startedAt && !s.backfill ? Math.max(1, Math.round((s.finishedAt - s.startedAt) / 60000)) : null,
     week: weekCount(weekStart(s.date)), prs };
 }
@@ -858,9 +905,44 @@ function sheetSettings() {
     <p class="hint" style="text-align:center">Rutina ${VERSION} · funciona sin internet</p>
   </div>`;
 }
-function sheetPick() {
-  const opts = S.plan.map((d, i) => d.type !== 'rest' && d.exercises.length ? `<button class="day" data-a="start" data-d="${i}"><div class="dbox"><b>${DAYS_1[i]}</b></div><div class="dtext"><div class="dtitle">${esc(d.title)}</div><div class="dsub">${esc(d.sub || plural(d.exercises.length, 'ejercicio', 'ejercicios'))}</div></div>${ic('next', 'sm')}</button>` : '').join('');
-  return `${sheetHead('¿Qué vas a entrenar?')}<p class="hint" style="margin:-6px 0 12px">Se registra con la fecha de hoy.</p><div class="stack">${opts || '<div class="empty">Tu rutina no tiene días con ejercicios todavía.</div>'}</div>`;
+function sheetPick(sh) {
+  const when = sh.when || 0, k = addDays(todayKey(), -when);
+  const list = weekRoutines();
+  const row = x => `<button class="day" data-a="start" data-d="${x.i}"><div class="dbox"><b>${DAYS_1[x.i]}</b></div><div class="dtext"><div class="dtitle">${esc(x.d.title)}</div><div class="dsub">${esc(x.d.sub || plural(x.d.exercises.length, 'ejercicio', 'ejercicios'))}</div></div>${x.done ? '<span class="status">Hecha</span>' : x.d.type === 'optional' ? '<span class="tag soft">OPCIONAL</span>' : '<span class="tag">PENDIENTE</span>'}</button>`;
+  const pend = list.filter(x => !x.done), done = list.filter(x => x.done);
+  return `${sheetHead('¿Qué vas a entrenar?')}
+  <div class="segctl" role="group" aria-label="Fecha">${['Hoy', 'Ayer', 'Anteayer'].map((l, i) => `<button class="${when === i ? 'on' : ''}" data-a="pickWhen" data-v="${i}">${l}</button>`).join('')}</div>
+  <p class="hint" style="margin:8px 0 14px">Se registra el <b>${fmtLong(k).toLowerCase()}</b>.</p>
+  <button class="opt" data-a="startFree" style="margin-bottom:14px"><span class="ico">${ic('pencil')}</span><span class="grow"><span class="t" style="font-size:16px">Entreno libre</span><span class="d">Otra rutina solo por esta vez. No cambia tu plan y suma a tu semana.</span></span>${ic('next', 'sm')}</button>
+  ${pend.length ? `<div class="sgroup" style="margin:0 0 8px">Pendientes esta semana</div><div class="stack">${pend.map(row).join('')}</div>` : ''}
+  ${done.length ? `<div class="sgroup" style="margin:16px 0 8px">Ya hechas esta semana</div><div class="stack">${done.map(row).join('')}</div>` : ''}
+  ${!list.length ? '<div class="empty">Tu rutina no tiene días con ejercicios todavía.</div>' : ''}`;
+}
+/* Agregar o reemplazar ejercicios solo en este entrenamiento */
+function sheetAddEx(sh) {
+  const s = S.sessions.find(x => x.id === sh.sid); if (!s) return '';
+  const inSession = new Set(s.items.map(i => i.id));
+  const rows = catalog().filter(c => !inSession.has(c.ex.id)).map(c => `<button class="prow" data-a="pickEx" data-id="${c.ex.id}" data-name="${esc(RP.norm(c.ex.name))}">${thumb(c.ex, 'sm')}<span class="grow" style="min-width:0"><span class="ellipsis" style="display:block;font-weight:600;font-size:15px">${esc(c.ex.name)}</span><span class="meta" style="display:block">${setsText(c.ex)} · ${esc(c.from)}</span></span>${ic('plus', 'sm')}</button>`).join('');
+  const replacing = sh.mode === 'replace' ? itemIn(s, sh.rid) : null;
+  return `${sheetHead(replacing ? 'Reemplazar por hoy' : 'Agregar ejercicio')}
+  <p class="hint" style="margin:-6px 0 12px">${replacing ? `En lugar de <b>${esc(replacing.name)}</b>, solo en este entrenamiento. Tu rutina no cambia.` : 'Solo para este entrenamiento. Tu rutina no cambia.'}</p>
+  <label class="sr" for="addq">Buscar o escribir un ejercicio</label>
+  <input id="addq" class="inp" style="background:var(--field)" data-in="addQ" placeholder="Buscá o escribí: Sentadilla hack 4x10" autocomplete="off" enterkeyhint="done" value="${esc(sh.q || '')}">
+  <button class="btn btn-ink btn-block" style="margin-top:8px" data-a="createEx" id="createbtn" ${sh.q ? '' : 'hidden'}>${ic('plus', 'sm')} <span id="createlbl">Agregar «${esc(sh.q || '')}»</span></button>
+  <p class="hint" style="margin-top:8px">Si escribís series y reps (4x10, 3x8-12) se cargan solas. Si el nombre coincide con uno tuyo, sigue su historial de pesos.</p>
+  ${rows ? `<div class="sgroup" style="margin:14px 0 2px">Tus ejercicios</div><div id="addlist">${rows}</div><p class="hint" id="addnone" hidden style="padding:10px 0">Ninguno coincide. Tocá «Agregar» para crearlo.</p>` : ''}
+  ${replacing ? '' : `<div class="divider" style="margin:14px 0"></div>
+  <details ${sh.paste ? 'open' : ''}><summary class="btn btn-soft btn-block" style="list-style:none">${ic('paste', 'sm')} Pegar la rutina de otra persona</summary>
+    <label class="sr" for="addpaste">Rutina en texto</label>
+    <textarea id="addpaste" class="inp big" style="min-height:150px;margin-top:10px;background:var(--field)" data-in="addPaste" placeholder="Hip thrust 4x10&#10;Prensa 3x12&#10;Estocadas 3x12 por pierna" spellcheck="false">${esc(sh.pasteText || '')}</textarea>
+    <button class="btn btn-ink btn-block" style="margin-top:8px" data-a="pasteEx">${ic('spark', 'sm')} Agregar todos</button>
+  </details>`}`;
+}
+/* Guardar un entreno libre como rutina de un día */
+function sheetSaveFree(sh) {
+  const s = S.sessions.find(x => x.id === sh.sid); if (!s) return '';
+  const rows = S.plan.map((d, i) => `<button class="day" data-a="saveFreeTo" data-i="${i}"><div class="dbox"><b>${DAYS_1[i]}</b></div><div class="dtext"><div class="dtitle">${DAYS[i]}</div><div class="dsub">${d.type === 'rest' || !d.exercises.length ? 'Libre' : `Hoy: ${esc(d.title)} · se reemplaza`}</div></div>${ic('next', 'sm')}</button>`).join('');
+  return `${sheetHead('Guardar como rutina')}<p class="hint" style="margin:-6px 0 12px">¿Qué día de tu semana va a ser <b>${esc(s.title)}</b>? Los pesos de hoy quedan en su historial.</p><div class="stack">${rows}</div>`;
 }
 function sheetSummary(s) {
   const g = goal();
@@ -872,6 +954,7 @@ function sheetSummary(s) {
   </div>
   ${s.prs.length ? `<div class="stack" style="margin-bottom:12px">${s.prs.map(p => `<div class="pr">${ic('trophy', 'sm')}<span>Récord: <b>${esc(p)}</b></span></div>`).join('')}</div>` : ''}
   <p class="msg" style="text-align:center;margin:0 0 16px">${s.week >= g ? (s.week === g ? 'Cumpliste tu objetivo de la semana.' : 'Semana cumplida y con extra.') : `${g - s.week === 1 ? 'Te falta 1' : `Te faltan ${g - s.week}`} para cumplir la semana.`}</p>
+  ${s.free ? `<button class="btn btn-soft btn-block" style="margin-bottom:8px" data-a="saveFree" data-sid="${s.sid}">${ic('layers', 'sm')} Guardar como rutina para repetirla</button>` : ''}
   <button class="btn btn-ink btn-lg btn-block" data-a="closeSheet">Listo</button>`;
 }
 function sheetInstall() {
@@ -889,6 +972,8 @@ function sheetSessionMenu() {
   const s = curSession(); if (!s) return '';
   const opt = (a, icon, t, d, danger) => `<button class="menu-opt ${danger ? 'danger' : ''}" data-a="${a}"><span class="thumb sm" style="background:var(--field)">${ic(icon)}</span><span class="grow"><span class="t">${t}</span><span class="d">${d}</span></span></button>`;
   return `${sheetHead('Opciones')}
+  ${opt('addExSheet', 'plus', 'Agregar ejercicio', 'Solo en este entrenamiento, sin cambiar tu rutina', false)}
+  ${s.free && s.items.length ? opt('saveFree', 'layers', 'Guardar como rutina', 'Asignalo a un día de tu semana para repetirlo', false) : ''}
   ${s.finishedAt
     ? opt('reopenSession', 'undo', 'Marcar como no terminado', 'Vuelve a quedar en curso para seguir cargando', false)
       + opt('deleteSession', 'trash', 'Eliminar este registro', `Se borra el entrenamiento del ${fmtDayShort(s.date)} y deja de contar en tus estadísticas`, true)
@@ -901,7 +986,7 @@ function sheetRoutineMenu() {
   ${opt('changeRoutine', 'layers', 'Cambiar rutina', 'Importar otra, elegir una armada o empezar de cero')}
   ${opt('shareRoutine', 'share', 'Compartir mi rutina', 'Mandala por WhatsApp. Se comparte la rutina, no tus pesos')}`;
 }
-const SHEETS = { exedit: sheetExEdit, settings: sheetSettings, pick: sheetPick, summary: sheetSummary, install: sheetInstall, smenu: sheetSessionMenu, rmenu: sheetRoutineMenu };
+const SHEETS = { addex: sheetAddEx, savefree: sheetSaveFree, exedit: sheetExEdit, settings: sheetSettings, pick: sheetPick, summary: sheetSummary, install: sheetInstall, smenu: sheetSessionMenu, rmenu: sheetRoutineMenu };
 const TABS = { hoy: tabHoy, progreso: tabProgreso, rutina: tabRutina };
 const SCREENS = { welcome: screenWelcome, templates: screenTemplates, scratch: screenScratch, import: screenImport, ai: screenAI, preview: screenPreview, day: screenDay, workout: screenWorkout, ex: screenEx };
 
@@ -1006,15 +1091,65 @@ const A = {
     applyDays(sc.days);
   },
   // Hoy
-  pickRoutine: () => openSheet({ type: 'pick', label: 'Elegir rutina' }),
+  pickRoutine: () => openSheet({ type: 'pick', label: 'Elegir rutina', when: 0 }),
+  pickWhen: d => { UI.sheet.when = +d.v; drawSheet(); },
+  startFree: () => {
+    const when = UI.sheet && UI.sheet.when || 0, k = addDays(todayKey(), -when);
+    closeSheet();
+    let s = S.sessions.find(x => x.free && x.date === k && !x.finishedAt);
+    if (!s) {
+      const n = S.sessions.filter(x => x.free).length;
+      s = { id: uid(), date: k, dayIdx: -1, free: true, title: 'Entreno libre', sub: '', items: [], entries: {}, startedAt: null, finishedAt: null, backfill: when > 0, updatedAt: Date.now() };
+      S.sessions.push(s); save();
+    }
+    const t = top(); if (t && t.type === 'day') UI.stack.pop();
+    UI.expanded = null; go({ type: 'workout', sid: s.id });
+    setTimeout(() => A.addExSheet(), 350);
+  },
+  addExSheet: () => { const s = curSession(); if (!s) return; const was = !!UI.sheet; closeSheet(); const open = () => openSheet({ type: 'addex', label: 'Agregar ejercicio', sid: s.id, mode: 'add', q: '' }); was ? setTimeout(open, 240) : open(); },
+  replaceEx: d => { const s = curSession(); if (!s) return; openSheet({ type: 'addex', label: 'Reemplazar ejercicio', sid: s.id, mode: 'replace', rid: d.id, q: '' }); },
+  removeEx: d => {
+    const s = curSession(); if (!s) return;
+    s.items = s.items.filter(i => i.id !== d.id); delete s.entries[d.id];
+    s.updatedAt = Date.now(); UI.expanded = null; invalidate(); save(); render(); toast('Ejercicio quitado');
+  },
+  pickEx: d => { const c = catalog().find(x => x.ex.id === d.id); if (c) addToSession([snapOf(c.ex)]); },
+  createEx: () => { const q = (UI.sheet.q || '').trim(); if (!q) return; addToSession([exFromText(q)]); },
+  pasteEx: () => {
+    const text = UI.sheet.pasteText || '';
+    if (!text.trim()) return toast('Pegá la rutina primero');
+    const r = RP.parse(text), all = r.blocks.flatMap(b => b.exercises);
+    if (!all.length) return toast('No encontré ejercicios en ese texto');
+    const s = S.sessions.find(x => x.id === UI.sheet.sid);
+    if (s && s.free && r.blocks.length === 1 && r.blocks[0].title && s.title === 'Entreno libre') s.title = r.blocks[0].title;
+    const seen = new Set(); const list = [];
+    all.forEach(p => {
+      const known = findByName(p.name);
+      const it = known ? Object.assign(snapOf(known), { sets: p.sets, rmin: p.rmin, rmax: p.rmax, unit: p.unit === 's' ? 's' : 'reps', uni: p.uni || known.uni })
+        : { id: uid(), name: p.name, sets: p.sets, rmin: p.rmin, rmax: p.rmax, unit: p.unit === 's' ? 's' : 'reps', icon: p.icon, note: p.note || '', rest: p.rest || '', uni: !!p.uni, photo: null };
+      if (!seen.has(it.id)) { seen.add(it.id); list.push(it); }
+    });
+    addToSession(list);
+  },
+  saveFree: d => {
+    const sid = d.sid || (curSession() && curSession().id); if (!sid) return;
+    closeSheet(); setTimeout(() => openSheet({ type: 'savefree', label: 'Guardar como rutina', sid }), 240);
+  },
+  saveFreeTo: d => {
+    const s = S.sessions.find(x => x.id === UI.sheet.sid), i = +d.i, day = S.plan[i];
+    if (!s) return;
+    if (day.exercises.length && !confirm(`El ${DAYS[i]} pasa a ser «${s.title}» y reemplaza a «${day.title}». Tu historial se mantiene. ¿Seguimos?`)) return;
+    S.plan[i] = { title: s.title, sub: '', type: 'train', exercises: s.items.map(it => { const c = snapOf(it); return c; }) };
+    invalidate(); save(); closeSheet(); render(); toast(`Guardada como rutina del ${DAYS[i].toLowerCase()}`);
+  },
   editToday: () => { UI.editDay = dayIdx(todayKey()); setTab('rutina'); },
-  start: d => { closeSheet(); startSession(todayKey(), +d.d); },
+  start: d => { const when = UI.sheet && UI.sheet.type === 'pick' ? (UI.sheet.when || 0) : 0; closeSheet(); startSession(addDays(todayKey(), -when), +d.d, when > 0); },
   backfill: d => startSession(d.k, +d.d, true),
   openSession: d => { UI.expanded = null; go({ type: 'workout', sid: d.sid }); },
   openDay: d => {
     const k = d.k, t = todayKey(), i = dayIdx(k), sess = sessionsOn(k);
     if (sess.length) {
-      const s = sess.find(x => !x.finishedAt && anyDone(x)) || sess.filter(x => x.finishedAt).pop() || sess[0];
+      const s = sess.find(isDraft) || sess.filter(x => x.finishedAt).pop() || sess[0];
       UI.expanded = null; return go({ type: 'workout', sid: s.id });
     }
     if (k === t) return startSession(t, i);
@@ -1145,6 +1280,16 @@ const A = {
   },
 };
 const IN = {
+  sessTitle: el => { const s = curSession(); if (s) { s.title = el.value || 'Entreno libre'; s.updatedAt = Date.now(); saveSoon(); } },
+  addPaste: el => { UI.sheet.pasteText = el.value; UI.sheet.paste = true; },
+  addQ: el => {
+    const q = el.value; UI.sheet.q = q;
+    const nq = RP.norm(RP.parseExercise(q).name || q).trim();
+    let shown = 0;
+    document.querySelectorAll('#addlist [data-name]').forEach(r => { const ok = !nq || r.dataset.name.includes(nq); r.hidden = !ok; if (ok) shown++; });
+    const b = $('createbtn'), l = $('createlbl'), none = $('addnone');
+    if (b) b.hidden = !q.trim(); if (l) l.textContent = `Agregar «${q.trim()}»`; if (none) none.hidden = shown > 0 || !q.trim();
+  },
   weight: el => {
     const s = curSession(); if (!s) return;
     const e = entry(s, el.dataset.id); e.touched = true; markStart(s);
@@ -1242,6 +1387,7 @@ document.addEventListener('change', e => {
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.matches && e.target.matches('input[data-in="weight"], .pv-h input, .titleinp, .subinp')) e.target.blur();
+  if (e.key === 'Enter' && e.target.id === 'addq') { e.preventDefault(); A.createEx(); }
   if (e.key === 'Escape' && UI.sheet) A.closeSheet();
 });
 document.addEventListener('focusin', e => {
@@ -1262,7 +1408,7 @@ S = load();
 applyTheme();
 tidySessions();
 save();
-const live = S.onboarded && S.sessions.find(s => s.date === todayKey() && !s.finishedAt && anyDone(s) && Date.now() - (s.updatedAt || 0) < 4 * 3600e3);
+const live = S.onboarded && S.sessions.find(s => s.date === todayKey() && isDraft(s) && Date.now() - (s.updatedAt || 0) < 4 * 3600e3);
 if (live) UI.stack = [{ type: 'workout', sid: live.id }];
 render();
 gcPhotos();

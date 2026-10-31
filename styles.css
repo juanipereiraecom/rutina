@@ -427,3 +427,6 @@ button.cell{cursor:pointer}
 #view .prompt::after{background:linear-gradient(to bottom,transparent,var(--card))}
 #view .ex .btn-soft{background:var(--field)}
 .stat b span{font-size:inherit;color:inherit;line-height:inherit}
+details>summary{list-style:none;cursor:pointer}
+details>summary::-webkit-details-marker{display:none}
+.streak[data-a]{min-height:36px;padding:0 2px;margin-top:6px}

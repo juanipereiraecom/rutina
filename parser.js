@@ -218,7 +218,8 @@ function parse(text) {
   const lines = String(text || '').replace(/\r/g, '').split('\n');
   const blocks = [];
   let cur = null;
-  for (const rawLine of lines) {
+  for (let li = 0; li < lines.length; li++) {
+    const rawLine = lines[li];
     let line = preclean(rawLine);
     if (!line || /^```/.test(line) || /^[-=_*~]{3,}$/.test(line)) continue;
     const hash = /^#{1,6}/.test(line);
@@ -231,7 +232,16 @@ function parse(text) {
     const n = norm(line);
     const hasSets = !!findSets(line.toLowerCase());
     const startsDay = STARTS_DAY.test(n.replace(/^#+\s*/, ''));
-    if (hash || (startsDay && !hasSets) || (!bullet && isHeader(line, n, hasSets))) {
+    // Título suelto al inicio de un bloque ("Piernas de Fede") seguido de ejercicios con series
+    let blockTitle = false;
+    if (!hasSets && !bullet && line.length <= 40 && !/[.!?]$/.test(line) && !SKIP_WORDS.test(n) && !/^desc/.test(n)) {
+      let prevBlank = true;
+      for (let j = li - 1; j >= 0; j--) { const pl = preclean(lines[j]); if (/^```/.test(pl)) continue; prevBlank = !pl; break; }
+      let next = '';
+      for (let j = li + 1; j < lines.length; j++) { const nl = preclean(lines[j]); if (nl && !/^```/.test(nl)) { next = nl.replace(/^\s*(?:[-*•·▪►>]+|\d{1,2}[.)])\s*/, ''); break; } }
+      if (prevBlank && next && findSets(next.toLowerCase())) blockTitle = true;
+    }
+    if (hash || blockTitle || (startsDay && !hasSets) || (!bullet && isHeader(line, n, hasSets))) {
       const b = parseHeader(line);
       if (/^rutina$|^mi rutina$|^routine$/.test(norm(b.title)) && b.weekday === null && !b.label) continue;
       cur = b; blocks.push(cur); continue;
